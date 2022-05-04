@@ -16,6 +16,7 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/util/bool_class.hh>
 #include <seastar/core/sharded.hh>
+#include <seastar/core/semaphore.hh>
 
 #include "auth/authenticator.hh"
 #include "auth/authorizer.hh"
@@ -84,6 +85,8 @@ class service final : public seastar::peering_sharded_service<service> {
     // Only one of these should be registered, so we end up with some unused instances. Not the end of the world.
     std::unique_ptr<::service::migration_listener> _migration_listener;
 
+    seastar::semaphore _perm_cache_cbk_available = {1};
+
 public:
     service(
             permissions_cache_config,
@@ -108,6 +111,10 @@ public:
     future<> start(::service::migration_manager&);
 
     future<> stop();
+
+    future<> update_config(permissions_cache_config);
+
+    future<> live_update_cbk_state();
 
     ///
     /// \returns an exceptional future with \ref nonexistant_role if the named role does not exist.

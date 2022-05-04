@@ -127,8 +127,7 @@ service::service(
                       mn,
                       create_object<authorizer>(sc.authorizer_java_name, qp, mm),
                       create_object<authenticator>(sc.authenticator_java_name, qp, mm),
-                      create_object<role_manager>(sc.role_manager_java_name, qp, mm)) {
-}
+                      create_object<role_manager>(sc.role_manager_java_name, qp, mm)) {}
 
 future<> service::create_keyspace_if_missing(::service::migration_manager& mm) const {
     assert(this_shard_id() == 0); // once_among_shards makes sure a function is executed on shard 0 only
@@ -179,6 +178,25 @@ future<> service::stop() {
         return make_ready_future<>();
     }).then([this] {
         return when_all_succeed(_role_manager->stop(), _authorizer->stop(), _authenticator->stop()).discard_result();
+    }).finally([this] {
+        return _perm_cache_cbk_available.wait(1).then([]() {
+            return make_ready_future<>();
+        }).finally([this]() {
+            _perm_cache_cbk_available.signal(1);
+        });
+    });
+}
+
+future<> service::update_config(permissions_cache_config c) {
+    return _permissions_cache->update_config(c).then([this]() {
+        _perm_cache_cbk_available.signal(1);
+        return make_ready_future<>();
+    });
+}
+
+future<> service::live_update_cbk_state() {
+    return _perm_cache_cbk_available.wait(1).then([] {
+        return make_ready_future<>();
     });
 }
 
