@@ -70,7 +70,7 @@ public:
         return _cache.stop();
     }
 
-    future<> update_config(const permissions_cache_config&);
+    future<> update_config(const permissions_cache_config);
     future<permission_set> get(const role_or_anonymous&, const resource&);
 };
 

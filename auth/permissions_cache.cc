@@ -21,7 +21,7 @@ permissions_cache::permissions_cache(const permissions_cache_config& c, service&
           }) {
 }
 
-future<> permissions_cache::update_config(const permissions_cache_config&) {
+future<> permissions_cache::update_config(const permissions_cache_config) {
     return _cache.reset();
 }
 
