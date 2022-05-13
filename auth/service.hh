@@ -114,8 +114,6 @@ public:
 
     future<> update_config(permissions_cache_config);
 
-    future<> live_update_cbk_state();
-
     ///
     /// \returns an exceptional future with \ref nonexistant_role if the named role does not exist.
     ///

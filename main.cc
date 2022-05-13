@@ -1319,25 +1319,20 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 auth_service.stop().get();
             });
 
-            auto permissions_cache_async_cb = ([&perm_cache_config, cfg] () {
-                perm_cache_config.max_entries = cfg->permissions_cache_max_entries();
-                perm_cache_config.validity_period = std::chrono::milliseconds(cfg->permissions_validity_in_ms());
-                perm_cache_config.update_period = std::chrono::milliseconds(cfg->permissions_update_interval_in_ms());
+            std::function<void (const uint32_t)> permissions_cache_async_cb = ([cfg] (uint32_t) {
+                auth::permissions_cache_config updated_perm_cache_config;
+                updated_perm_cache_config.max_entries = cfg->permissions_cache_max_entries();
+                updated_perm_cache_config.validity_period = std::chrono::milliseconds(cfg->permissions_validity_in_ms());
+                updated_perm_cache_config.update_period = std::chrono::milliseconds(cfg->permissions_update_interval_in_ms());
 
-                return auth_service.invoke_on_all([perm_cache_config] (auth::service& auth) {
-                    return auth.update_config(perm_cache_config);
-                });
+                (void) auth_service.invoke_on_all([updated_perm_cache_config] (auth::service& auth) {
+                    return auth.update_config(updated_perm_cache_config);
+                }).discard_result();
             });
 
-            auto permissions_cache_sync_cb = ([&perm_cache_config, cfg, permissions_cache_async_cb] (uint32_t) {
-                auto cbk_state = auth_service.local().live_update_cbk_state().then([permissions_cache_async_cb]() {
-                    return permissions_cache_async_cb();
-                });
-            });
-
-            auto permissions_validity_in_ms_observer = cfg->permissions_validity_in_ms.observe(permissions_cache_sync_cb);
-            auto permissions_update_interval_in_ms_observer = cfg->permissions_update_interval_in_ms.observe(permissions_cache_sync_cb);
-            auto permissions_cache_max_entries_observer = cfg->permissions_cache_max_entries.observe(permissions_cache_sync_cb);
+            auto permissions_validity_in_ms_observer = cfg->permissions_validity_in_ms.observe(permissions_cache_async_cb);
+            auto permissions_update_interval_in_ms_observer = cfg->permissions_update_interval_in_ms.observe(permissions_cache_async_cb);
+            auto permissions_cache_max_entries_observer = cfg->permissions_cache_max_entries.observe(permissions_cache_async_cb);
 
             snapshot_ctl.start(std::ref(db)).get();
             auto stop_snapshot_ctl = defer_verbose_shutdown("snapshots", [&snapshot_ctl] {

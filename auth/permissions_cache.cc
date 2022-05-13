@@ -21,8 +21,8 @@ permissions_cache::permissions_cache(const permissions_cache_config& c, service&
           }) {
 }
 
-future<> permissions_cache::update_config(const permissions_cache_config) {
-    return _cache.reset();
+future<> permissions_cache::update_config(const permissions_cache_config c) {
+    return _cache.update_config(c.max_entries, c.validity_period, c.update_period);
 }
 
 future<permission_set> permissions_cache::get(const role_or_anonymous& maybe_role, const resource& r) {

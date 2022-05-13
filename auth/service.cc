@@ -179,24 +179,19 @@ future<> service::stop() {
     }).then([this] {
         return when_all_succeed(_role_manager->stop(), _authorizer->stop(), _authenticator->stop()).discard_result();
     }).finally([this] {
-        return _perm_cache_cbk_available.wait(1).then([]() {
+        return _perm_cache_cbk_available.wait().then([]() {
             return make_ready_future<>();
         }).finally([this]() {
-            _perm_cache_cbk_available.signal(1);
+            _perm_cache_cbk_available.signal();
         });
     });
 }
 
 future<> service::update_config(permissions_cache_config c) {
-    return _permissions_cache->update_config(c).then([this]() {
-        _perm_cache_cbk_available.signal(1);
-        return make_ready_future<>();
-    });
-}
-
-future<> service::live_update_cbk_state() {
-    return _perm_cache_cbk_available.wait(1).then([] {
-        return make_ready_future<>();
+    return _perm_cache_cbk_available.wait().then([this, c] {
+        return _permissions_cache->update_config(c);
+    }).finally([this] {
+        _perm_cache_cbk_available.signal();
     });
 }
 
