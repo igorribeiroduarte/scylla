@@ -190,6 +190,7 @@ seastar::future<json::json_return_type> run_toppartitions_query(db::toppartition
                 for (auto& d: topk_results.read.top(q.list_size())) {
                     cf::toppartitions_record r;
                     r.partition = (legacy_request ? "" : "(" + d.item.schema->ks_name() + ":" + d.item.schema->cf_name() + ") ") + sstring(d.item);
+                    r.shard = d.item.shard;
                     r.count = d.count;
                     r.error = d.error;
                     results.read.push(r);
@@ -197,6 +198,7 @@ seastar::future<json::json_return_type> run_toppartitions_query(db::toppartition
                 for (auto& d: topk_results.write.top(q.list_size())) {
                     cf::toppartitions_record r;
                     r.partition = (legacy_request ? "" : "(" + d.item.schema->ks_name() + ":" + d.item.schema->cf_name() + ") ") + sstring(d.item);
+                    r.shard = d.item.shard;
                     r.count = d.count;
                     r.error = d.error;
                     results.write.push(r);
