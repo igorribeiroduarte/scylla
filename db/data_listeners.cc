@@ -142,7 +142,7 @@ future<toppartitions_query::results> toppartitions_query::gather(unsigned res_si
         res.write.append(toppartitions_data_listener::localize(std::get<1>(*rd_wr)));
         return res;
     };
-    return _query->map_reduce0(map, results{res_size}, reduce)
+    return _query->map_reduce0(map, results{res_size * smp::count}, reduce)
         .handle_exception([] (auto ep) {
             dblog.error("toppartitions_query::gather: {}", ep);
             return make_exception_future<results>(ep);
