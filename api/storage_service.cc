@@ -190,33 +190,31 @@ static auto wrap_ks_cf(http_context &ctx, ks_cf_func f) {
 
 seastar::future<json::json_return_type> run_toppartitions_query(db::toppartitions_query& q, http_context &ctx, bool legacy_request) {
     namespace cf = httpd::column_family_json;
-    return q.scatter().then([&q, legacy_request] {
-        return sleep(q.duration()).then([&q, legacy_request] {
-            return q.gather(q.list_size()).then([&q, legacy_request] (auto topk_results) {
-                apilog.debug("toppartitions query: processing results");
-                cf::toppartitions_query_results results;
+    return q.scatter().then([&q, legacy_request, &ctx] {
+        return q.gather(ctx.db, q.list_size()).then([&q, legacy_request] (auto topk_results) {
+            apilog.debug("toppartitions query: processing results");
+            cf::toppartitions_query_results results;
 
-                results.read_cardinality = topk_results.read_cardinality;
-                results.write_cardinality = topk_results.write_cardinality;
+            results.read_cardinality = topk_results.read_cardinality;
+            results.write_cardinality = topk_results.write_cardinality;
 
-                for (auto& d: topk_results.read.top(q.list_size() * smp::count).values) {
-                    cf::toppartitions_record r;
-                    r.partition = (legacy_request ? "" : "(" + d.item.schema->ks_name() + ":" + d.item.schema->cf_name() + ") ") + sstring(d.item);
-                    r.shard = d.item.shard;
-                    r.count = d.count;
-                    r.error = d.error;
-                    results.read.push(r);
-                }
-                for (auto& d: topk_results.write.top(q.list_size() * smp::count).values) {
-                    cf::toppartitions_record r;
-                    r.partition = (legacy_request ? "" : "(" + d.item.schema->ks_name() + ":" + d.item.schema->cf_name() + ") ") + sstring(d.item);
-                    r.shard = d.item.shard;
-                    r.count = d.count;
-                    r.error = d.error;
-                    results.write.push(r);
-                }
-                return make_ready_future<json::json_return_type>(results);
-            });
+            for (auto& d: topk_results.read.top(q.list_size() * smp::count).values) {
+                cf::toppartitions_record r;
+                r.partition = (legacy_request ? "" : "(" + d.item.schema->ks_name() + ":" + d.item.schema->cf_name() + ") ") + sstring(d.item);
+                r.shard = d.item.shard;
+                r.count = d.count;
+                r.error = d.error;
+                results.read.push(r);
+            }
+            for (auto& d: topk_results.write.top(q.list_size() * smp::count).values) {
+                cf::toppartitions_record r;
+                r.partition = (legacy_request ? "" : "(" + d.item.schema->ks_name() + ":" + d.item.schema->cf_name() + ") ") + sstring(d.item);
+                r.shard = d.item.shard;
+                r.count = d.count;
+                r.error = d.error;
+                results.write.push(r);
+            }
+            return make_ready_future<json::json_return_type>(results);
         });
     });
 }

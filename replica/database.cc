@@ -366,6 +366,7 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     , _system_sstables_manager(std::make_unique<sstables::sstables_manager>(*_nop_large_data_handler, _cfg, feat, _row_cache_tracker, dbcfg.available_memory, sst_dir_sem.local()))
     , _result_memory_limiter(dbcfg.available_memory / 10)
     , _data_listeners(std::make_unique<db::data_listeners>())
+    , _tp_listener(std::make_unique<db::toppartitions_data_listener>(*this, std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash>(), std::unordered_set<sstring>()))
     , _mnotifier(mn)
     , _feat(feat)
     , _shared_token_metadata(stm)
@@ -1269,6 +1270,7 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
     cfg.view_update_concurrency_semaphore = _config.view_update_concurrency_semaphore;
     cfg.view_update_concurrency_semaphore_limit = _config.view_update_concurrency_semaphore_limit;
     cfg.data_listeners = &db.data_listeners();
+    //FIXME: Add a new line here maybe. Not sure if it's necessary since I'm not coing to call tp_listener inside table
     cfg.x_log2_compaction_groups = db_config.x_log2_compaction_groups();
 
     return cfg;

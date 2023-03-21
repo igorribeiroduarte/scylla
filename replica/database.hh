@@ -117,6 +117,7 @@ class config;
 class extensions;
 class rp_handle;
 class data_listeners;
+class toppartitions_data_listener;
 class large_data_handler;
 class system_keyspace;
 class table_selector;
@@ -1353,6 +1354,7 @@ private:
 
     friend db::data_listeners;
     std::unique_ptr<db::data_listeners> _data_listeners;
+    std::unique_ptr<db::toppartitions_data_listener> _tp_listener;
 
     service::migration_notifier& _mnotifier;
     gms::feature_service& _feat;
@@ -1700,6 +1702,10 @@ public:
 
     db::data_listeners& data_listeners() const {
         return *_data_listeners;
+    }
+
+    db::toppartitions_data_listener& tp_listener() const {
+        return *_tp_listener;
     }
 
     // Get the maximum result size for an unlimited query, appropriate for the
