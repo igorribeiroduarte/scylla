@@ -465,6 +465,34 @@ static future<json::json_return_type> describe_ring_as_json(sharded<service::sto
     co_return json::json_return_type(stream_range_as_array(co_await ss.local().describe_ring(keyspace), token_range_endpoints_to_json));
 }
 
+static std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> parse_toppartitions_table_filters(sstring filters) {
+    std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> table_filters {};
+    if (!filters.empty()) {
+        std::stringstream ss { filters };
+        std::string filter;
+        while (!filters.empty() && ss.good()) {
+            std::getline(ss, filter, ',');
+            table_filters.emplace(parse_fully_qualified_cf_name(filter));
+        }
+    }
+
+    return table_filters;
+}
+
+static std::unordered_set<sstring> parse_toppartitions_keyspace_filters(sstring filters) {
+    std::unordered_set<sstring> keyspace_filters {};
+    if (!filters.empty()) {
+        std::stringstream ss { filters };
+        std::string filter;
+        while (!filters.empty() && ss.good()) {
+            std::getline(ss, filter, ',');
+            keyspace_filters.emplace(std::move(filter));
+        }
+    }
+
+    return keyspace_filters;
+}
+
 void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_service>& ss, gms::gossiper& g, sharded<cdc::generation_service>& cdc_gs, sharded<db::system_keyspace>& sys_ks) {
     ss::local_hostid.set(r, [&ctx](std::unique_ptr<http::request> req) {
         auto id = ctx.db.local().get_config().host_id;
@@ -497,32 +525,38 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         }));
     });
 
+    ss::toppartitions_generic_per_shard.set(r, [&ctx] (std::unique_ptr<http::request> req) {
+        bool filters_provided = req->query_parameters.contains("table_filters") || req->query_parameters.contains("keyspace_filters");
+
+        std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> table_filters = parse_toppartitions_table_filters(req->get_query_param("table_filters"));
+        std::unordered_set<sstring> keyspace_filters = parse_toppartitions_keyspace_filters(req->get_query_param("keyspace_filters"));
+
+        // when the query is empty return immediately
+        if (filters_provided && table_filters.empty() && keyspace_filters.empty()) {
+            apilog.debug("toppartitions query: processing results");
+            httpd::column_family_json::toppartitions_query_results results;
+
+            results.read_cardinality = 0;
+            results.write_cardinality = 0;
+
+            return make_ready_future<json::json_return_type>(results);
+        }
+
+        std::chrono::milliseconds duration = 0ms;
+        api::req_param<unsigned> capacity(*req, "capacity", 256);
+        api::req_param<unsigned> list_size(*req, "list_size", 10);
+
+        return seastar::do_with(db::toppartitions_query(ctx.db, std::move(table_filters), std::move(keyspace_filters), duration, list_size, capacity), [&ctx] (db::toppartitions_query& q) {
+            bool per_shard = true;
+            return run_toppartitions_query(q, ctx, per_shard);
+        });
+    });
+
     ss::toppartitions_generic.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        bool filters_provided = false;
+        bool filters_provided = req->query_parameters.contains("table_filters") || req->query_parameters.contains("keyspace_filters");
 
-        std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> table_filters {};
-        if (req->query_parameters.contains("table_filters")) {
-            filters_provided = true;
-            auto filters = req->get_query_param("table_filters");
-            std::stringstream ss { filters };
-            std::string filter;
-            while (!filters.empty() && ss.good()) {
-                std::getline(ss, filter, ',');
-                table_filters.emplace(parse_fully_qualified_cf_name(filter));
-            }
-        }
-
-        std::unordered_set<sstring> keyspace_filters {};
-        if (req->query_parameters.contains("keyspace_filters")) {
-            filters_provided = true;
-            auto filters = req->get_query_param("keyspace_filters");
-            std::stringstream ss { filters };
-            std::string filter;
-            while (!filters.empty() && ss.good()) {
-                std::getline(ss, filter, ',');
-                keyspace_filters.emplace(std::move(filter));
-            }
-        }
+        std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> table_filters = parse_toppartitions_table_filters(req->get_query_param("table_filters"));
+        std::unordered_set<sstring> keyspace_filters = parse_toppartitions_keyspace_filters(req->get_query_param("keyspace_filters"));
 
         // when the query is empty return immediately
         if (filters_provided && table_filters.empty() && keyspace_filters.empty()) {
