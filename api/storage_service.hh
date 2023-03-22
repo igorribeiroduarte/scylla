@@ -72,7 +72,7 @@ void set_rpc_controller(http_context& ctx, routes& r, thrift_controller& ctl);
 void unset_rpc_controller(http_context& ctx, routes& r);
 void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_ctl);
 void unset_snapshot(http_context& ctx, routes& r);
-seastar::future<json::json_return_type> run_toppartitions_query(db::toppartitions_query& q, http_context &ctx, bool legacy_request = false);
+seastar::future<json::json_return_type> run_toppartitions_query(db::toppartitions_query& q, http_context &ctx, bool per_shard = false, bool legacy_request = false);
 
 } // namespace api
 

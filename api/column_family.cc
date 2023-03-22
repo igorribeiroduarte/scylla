@@ -1002,6 +1002,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     });
 
 
+    // FIXME: I'm not sure if I should touch this one. Maybe it should be only the generic one (on storage_service.cc) 
     cf::toppartitions.set(r, [&ctx] (std::unique_ptr<http::request> req) {
         auto name = req->param["name"];
         auto [ks, cf] = parse_fully_qualified_cf_name(name);
@@ -1009,11 +1010,12 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
         api::req_param<std::chrono::milliseconds, unsigned> duration{*req, "duration", 1000ms};
         api::req_param<unsigned> capacity(*req, "capacity", 256);
         api::req_param<unsigned> list_size(*req, "list_size", 10);
+        api::req_param<bool> per_shard(*req, "per_shard", false);
 
         apilog.info("toppartitions query: name={} duration={} list_size={} capacity={}",
             name, duration.param, list_size.param, capacity.param);
 
-        return seastar::do_with(db::toppartitions_query(ctx.db, {{ks, cf}}, {}, duration.value, list_size, capacity), [&ctx] (db::toppartitions_query& q) {
+        return seastar::do_with(db::toppartitions_query(ctx.db, {{ks, cf}}, {}, duration.value, list_size, capacity, per_shard), [&ctx] (db::toppartitions_query& q) {
             return run_toppartitions_query(q, ctx, true);
         });
     });

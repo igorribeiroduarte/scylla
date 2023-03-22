@@ -188,33 +188,37 @@ static auto wrap_ks_cf(http_context &ctx, ks_cf_func f) {
     };
 }
 
-seastar::future<json::json_return_type> run_toppartitions_query(db::toppartitions_query& q, http_context &ctx, bool legacy_request) {
+seastar::future<json::json_return_type> run_toppartitions_query(db::toppartitions_query& q, http_context &ctx, bool per_shard, bool legacy_request) {
     namespace cf = httpd::column_family_json;
-    return q.scatter().then([&q, legacy_request, &ctx] {
-        return q.gather(ctx.db, q.list_size()).then([&q, legacy_request] (auto topk_results) {
-            apilog.debug("toppartitions query: processing results");
-            cf::toppartitions_query_results results;
+    apilog.info("per_shard: {}", per_shard);
+    return q.scatter(per_shard).then([&q, legacy_request, &ctx, per_shard] {
+        return sleep(q.duration()).then([&q, legacy_request, &ctx, per_shard] { 
+            auto f = per_shard ? &db::toppartitions_query::gather_per_shard : &db::toppartitions_query::gather;
+            return (q.*f)(ctx.db, q.list_size()).then([&q, legacy_request] (auto topk_results) {
+                apilog.debug("toppartitions query: processing results");
+                cf::toppartitions_query_results results;
 
-            results.read_cardinality = topk_results.read_cardinality;
-            results.write_cardinality = topk_results.write_cardinality;
+                results.read_cardinality = topk_results.read_cardinality;
+                results.write_cardinality = topk_results.write_cardinality;
 
-            for (auto& d: topk_results.read.top(q.list_size() * smp::count).values) {
-                cf::toppartitions_record r;
-                r.partition = (legacy_request ? "" : "(" + d.item.schema->ks_name() + ":" + d.item.schema->cf_name() + ") ") + sstring(d.item);
-                r.shard = d.item.shard;
-                r.count = d.count;
-                r.error = d.error;
-                results.read.push(r);
-            }
-            for (auto& d: topk_results.write.top(q.list_size() * smp::count).values) {
-                cf::toppartitions_record r;
-                r.partition = (legacy_request ? "" : "(" + d.item.schema->ks_name() + ":" + d.item.schema->cf_name() + ") ") + sstring(d.item);
-                r.shard = d.item.shard;
-                r.count = d.count;
-                r.error = d.error;
-                results.write.push(r);
-            }
-            return make_ready_future<json::json_return_type>(results);
+                for (auto& d: topk_results.read.top(q.list_size() * smp::count).values) {
+                    cf::toppartitions_record r;
+                    r.partition = (legacy_request ? "" : "(" + d.item.schema->ks_name() + ":" + d.item.schema->cf_name() + ") ") + sstring(d.item);
+                    r.shard = d.item.shard;
+                    r.count = d.count;
+                    r.error = d.error;
+                    results.read.push(r);
+                }
+                for (auto& d: topk_results.write.top(q.list_size() * smp::count).values) {
+                    cf::toppartitions_record r;
+                    r.partition = (legacy_request ? "" : "(" + d.item.schema->ks_name() + ":" + d.item.schema->cf_name() + ") ") + sstring(d.item);
+                    r.shard = d.item.shard;
+                    r.count = d.count;
+                    r.error = d.error;
+                    results.write.push(r);
+                }
+                return make_ready_future<json::json_return_type>(results);
+            });
         });
     });
 }
@@ -458,6 +462,34 @@ static future<json::json_return_type> describe_ring_as_json(sharded<service::sto
     co_return json::json_return_type(stream_range_as_array(co_await ss.local().describe_ring(keyspace), token_range_endpoints_to_json));
 }
 
+static std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> parse_toppartitions_table_filters(sstring filters) {
+    std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> table_filters {};
+    if (!filters.empty()) {
+        std::stringstream ss { filters };
+        std::string filter;
+        while (!filters.empty() && ss.good()) {
+            std::getline(ss, filter, ',');
+            table_filters.emplace(parse_fully_qualified_cf_name(filter));
+        }
+    }
+
+    return table_filters;
+}
+
+static std::unordered_set<sstring> parse_toppartitions_keyspace_filters(sstring filters) {
+    std::unordered_set<sstring> keyspace_filters {};
+    if (!filters.empty()) {
+        std::stringstream ss { filters };
+        std::string filter;
+        while (!filters.empty() && ss.good()) {
+            std::getline(ss, filter, ',');
+            keyspace_filters.emplace(std::move(filter));
+        }
+    }
+
+    return keyspace_filters;
+}
+
 void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_service>& ss, gms::gossiper& g, sharded<cdc::generation_service>& cdc_gs, sharded<db::system_keyspace>& sys_ks) {
     ss::local_hostid.set(r, [&ctx](std::unique_ptr<http::request> req) {
         auto id = ctx.db.local().get_config().host_id;
@@ -490,32 +522,40 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         }));
     });
 
+    ss::toppartitions_generic_per_shard.set(r, [&ctx] (std::unique_ptr<http::request> req) {
+        bool filters_provided = req->query_parameters.contains("table_filters") || req->query_parameters.contains("keyspace_filters");
+
+        std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> table_filters = parse_toppartitions_table_filters(req->get_query_param("table_filters"));
+        std::unordered_set<sstring> keyspace_filters = parse_toppartitions_keyspace_filters(req->get_query_param("keyspace_filters"));
+
+        // when the query is empty return immediately
+        if (filters_provided && table_filters.empty() && keyspace_filters.empty()) {
+            apilog.debug("toppartitions query: processing results");
+            httpd::column_family_json::toppartitions_query_results results;
+
+            results.read_cardinality = 0;
+            results.write_cardinality = 0;
+
+            return make_ready_future<json::json_return_type>(results);
+        }
+
+        std::chrono::milliseconds duration = 0ms;
+        api::req_param<unsigned> capacity(*req, "capacity", 256);
+        api::req_param<unsigned> list_size(*req, "list_size", 10);
+        // FIXME: Fix this since now I created a different endpoint 
+        api::req_param<bool> per_shard_rm(*req, "per_shard", false);
+
+        return seastar::do_with(db::toppartitions_query(ctx.db, std::move(table_filters), std::move(keyspace_filters), duration, list_size, capacity, per_shard_rm), [&ctx] (db::toppartitions_query& q) {
+            bool per_shard = true;
+            return run_toppartitions_query(q, ctx, per_shard);
+        });
+    });
+
     ss::toppartitions_generic.set(r, [&ctx] (std::unique_ptr<http::request> req) {
         bool filters_provided = false;
 
-        std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> table_filters {};
-        if (req->query_parameters.contains("table_filters")) {
-            filters_provided = true;
-            auto filters = req->get_query_param("table_filters");
-            std::stringstream ss { filters };
-            std::string filter;
-            while (!filters.empty() && ss.good()) {
-                std::getline(ss, filter, ',');
-                table_filters.emplace(parse_fully_qualified_cf_name(filter));
-            }
-        }
-
-        std::unordered_set<sstring> keyspace_filters {};
-        if (req->query_parameters.contains("keyspace_filters")) {
-            filters_provided = true;
-            auto filters = req->get_query_param("keyspace_filters");
-            std::stringstream ss { filters };
-            std::string filter;
-            while (!filters.empty() && ss.good()) {
-                std::getline(ss, filter, ',');
-                keyspace_filters.emplace(std::move(filter));
-            }
-        }
+        std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> table_filters = parse_toppartitions_table_filters(req->get_query_param("table_filters"));
+        std::unordered_set<sstring> keyspace_filters = parse_toppartitions_keyspace_filters(req->get_query_param("keyspace_filters"));
 
         // when the query is empty return immediately
         if (filters_provided && table_filters.empty() && keyspace_filters.empty()) {
@@ -531,11 +571,13 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         api::req_param<std::chrono::milliseconds, unsigned> duration{*req, "duration", 1000ms};
         api::req_param<unsigned> capacity(*req, "capacity", 256);
         api::req_param<unsigned> list_size(*req, "list_size", 10);
+        // FIXME: Fix this since now I created a different endpoint 
+        api::req_param<bool> per_shard(*req, "per_shard", false);
 
         apilog.info("toppartitions query: #table_filters={} #keyspace_filters={} duration={} list_size={} capacity={}",
             !table_filters.empty() ? std::to_string(table_filters.size()) : "all", !keyspace_filters.empty() ? std::to_string(keyspace_filters.size()) : "all", duration.param, list_size.param, capacity.param);
 
-        return seastar::do_with(db::toppartitions_query(ctx.db, std::move(table_filters), std::move(keyspace_filters), duration.value, list_size, capacity), [&ctx] (db::toppartitions_query& q) {
+        return seastar::do_with(db::toppartitions_query(ctx.db, std::move(table_filters), std::move(keyspace_filters), duration.value, list_size, capacity, per_shard), [&ctx] (db::toppartitions_query& q) {
             return run_toppartitions_query(q, ctx);
         });
     });

@@ -147,11 +147,12 @@ class toppartitions_query {
     std::chrono::milliseconds _duration;
     size_t _list_size;
     size_t _capacity;
+    bool _per_shard;
     std::unique_ptr<sharded<toppartitions_data_listener>> _query;
 
 public:
     toppartitions_query(seastar::distributed<replica::database>& xdb, std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash>&& table_filters,
-        std::unordered_set<sstring>&& keyspace_filters, std::chrono::milliseconds duration, size_t list_size, size_t capacity);
+        std::unordered_set<sstring>&& keyspace_filters, std::chrono::milliseconds duration, size_t list_size, size_t capacity, bool per_shard);
 
     struct results {
         toppartitions_data_listener::top_k read;
@@ -166,8 +167,10 @@ public:
     std::chrono::milliseconds duration() const { return _duration; }
     size_t list_size() const { return _list_size; }
     size_t capacity() const { return _capacity; }
+    size_t per_shard() const { return _per_shard; }
 
-    future<> scatter();
+    future<> scatter(bool per_shard);
+    future<results> gather_per_shard(sharded<replica::database>& sharded_db, unsigned res_size = 256);
     future<results> gather(sharded<replica::database>& sharded_db, unsigned results_size = 256);
 };
 

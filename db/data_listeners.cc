@@ -53,12 +53,12 @@ toppartitions_item_key::operator sstring() const {
 
 toppartitions_data_listener::toppartitions_data_listener(replica::database& db, std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> table_filters,
         std::unordered_set<sstring> keyspace_filters) : _db(db), _table_filters(std::move(table_filters)), _keyspace_filters(std::move(keyspace_filters)) {
-    dblog.debug("toppartitions_data_listener: installing {}", fmt::ptr(this));
+    dblog.info("toppartitions_data_listener: installing {}", fmt::ptr(this));
     _db.data_listeners().install(this);
 }
 
 toppartitions_data_listener::~toppartitions_data_listener() {
-    dblog.debug("toppartitions_data_listener: uninstalling {}", fmt::ptr(this));
+    dblog.info("toppartitions_data_listener: uninstalling {}", fmt::ptr(this));
     _db.data_listeners().uninstall(this);
 }
 
@@ -117,22 +117,22 @@ toppartitions_data_listener::localize(const global_top_k::results& r) {
 }
 
 toppartitions_query::toppartitions_query(distributed<replica::database>& xdb, std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash>&& table_filters,
-        std::unordered_set<sstring>&& keyspace_filters, std::chrono::milliseconds duration, size_t list_size, size_t capacity)
+        std::unordered_set<sstring>&& keyspace_filters, std::chrono::milliseconds duration, size_t list_size, size_t capacity, bool per_shard)
         : _xdb(xdb), _table_filters(std::move(table_filters)), _keyspace_filters(std::move(keyspace_filters)), _duration(duration), _list_size(list_size), _capacity(capacity),
-          _query(std::make_unique<sharded<toppartitions_data_listener>>()) {
-    dblog.debug("toppartitions_query on {} column families and {} keyspaces", !_table_filters.empty() ? std::to_string(_table_filters.size()) : "all",
+        _per_shard(per_shard), _query(std::make_unique<sharded<toppartitions_data_listener>>()) {
+    dblog.info("toppartitions_query on {} column families and {} keyspaces", !_table_filters.empty() ? std::to_string(_table_filters.size()) : "all",
                 !_keyspace_filters.empty() ? std::to_string(_keyspace_filters.size()) : "all");
 }
 
-future<> toppartitions_query::scatter() {
-    //return _query->start(std::ref(_xdb), _table_filters, _keyspace_filters);
-    return make_ready_future<>();
+future<> toppartitions_query::scatter(bool per_shard) {
+    return per_shard ? make_ready_future<>() : _query->start(std::ref(_xdb), _table_filters, _keyspace_filters);
 }
 
 using top_t = toppartitions_data_listener::global_top_k::results;
 
-future<toppartitions_query::results> toppartitions_query::gather(sharded<replica::database>& sharded_db, unsigned res_size) {
-    dblog.debug("toppartitions_query::gather");
+// FIXME: Use a single method for gathering
+future<toppartitions_query::results> toppartitions_query::gather_per_shard(sharded<replica::database>& sharded_db, unsigned res_size) {
+    dblog.info("toppartitions_query::gather_per_shard");
 
     auto map = [res_size] (replica::database &db) {
         dblog.trace("toppartitions_query::map_reduce with listener {}", fmt::ptr(&db.tp_listener()));
@@ -149,7 +149,35 @@ future<toppartitions_query::results> toppartitions_query::gather(sharded<replica
         res.write_cardinality += std::get<1>(*rd_wr).cardinality;
         return res;
     };
+
     return sharded_db.map_reduce0(map, results{res_size * smp::count}, reduce)
+        .handle_exception([] (auto ep) {
+            dblog.error("toppartitions_query::gather: {}", ep);
+            return make_exception_future<results>(ep);
+        });
+}
+
+future<toppartitions_query::results> toppartitions_query::gather(sharded<replica::database>& sharded_db, unsigned res_size) {
+    dblog.info("toppartitions_query::gather");
+
+    auto map = [res_size] (toppartitions_data_listener& listener) {
+        dblog.trace("toppartitions_query::map_reduce with listener {}", fmt::ptr(&listener));
+        top_t rd = toppartitions_data_listener::globalize(listener._top_k_read.top(res_size));
+        top_t wr = toppartitions_data_listener::globalize(listener._top_k_write.top(res_size));
+
+        return make_foreign(std::make_unique<std::tuple<top_t, top_t>>(std::move(rd), std::move(wr)));
+    };
+
+    auto reduce = [] (results res, foreign_ptr<std::unique_ptr<std::tuple<top_t, top_t>>> rd_wr) {
+        res.read.append(toppartitions_data_listener::localize(std::get<0>(*rd_wr)));
+        res.write.append(toppartitions_data_listener::localize(std::get<1>(*rd_wr)));
+
+        res.read_cardinality += std::get<0>(*rd_wr).cardinality;
+        res.write_cardinality += std::get<1>(*rd_wr).cardinality;
+        return res;
+    };
+
+    return _query->map_reduce0(map, results{res_size * smp::count}, reduce)
         .handle_exception([] (auto ep) {
             dblog.error("toppartitions_query::gather: {}", ep);
             return make_exception_future<results>(ep);
