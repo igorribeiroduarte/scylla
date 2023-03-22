@@ -130,7 +130,7 @@ future<> toppartitions_query::scatter() {
 
 using top_t = toppartitions_data_listener::global_top_k::results;
 
-future<toppartitions_query::results> toppartitions_query::gather(unsigned res_size) {
+future<toppartitions_query::results> toppartitions_query::gather(sharded<replica::database>& sharded_db, bool per_shard, unsigned res_size) {
     dblog.debug("toppartitions_query::gather");
 
     auto map = [res_size] (toppartitions_data_listener& listener) {
@@ -140,6 +140,9 @@ future<toppartitions_query::results> toppartitions_query::gather(unsigned res_si
 
         return make_foreign(std::make_unique<std::tuple<top_t, top_t>>(std::move(rd), std::move(wr)));
     };
+    auto map_per_shard = [map] (replica::database &db) {
+        return map(db.tp_listener());
+    };
     auto reduce = [] (results res, foreign_ptr<std::unique_ptr<std::tuple<top_t, top_t>>> rd_wr) {
         res.read.append(toppartitions_data_listener::localize(std::get<0>(*rd_wr)));
         res.write.append(toppartitions_data_listener::localize(std::get<1>(*rd_wr)));
@@ -148,6 +151,14 @@ future<toppartitions_query::results> toppartitions_query::gather(unsigned res_si
         res.write_cardinality += std::get<1>(*rd_wr).cardinality;
         return res;
     };
+
+    if (per_shard) {
+        return sharded_db.map_reduce0(map_per_shard, results{res_size * smp::count}, reduce)
+            .handle_exception([] (auto ep) {
+                dblog.error("toppartitions_query::gather_per_shard: {}", ep);
+                return make_exception_future<results>(ep);
+            });
+    } else {
     return _query->map_reduce0(map, results{res_size * smp::count}, reduce)
         .handle_exception([] (auto ep) {
             dblog.error("toppartitions_query::gather: {}", ep);
@@ -158,6 +169,7 @@ future<toppartitions_query::results> toppartitions_query::gather(unsigned res_si
                 dblog.debug("toppartitions_query::gather: query stopped");
             });
         });
+    }
 }
 
 } // namespace db
