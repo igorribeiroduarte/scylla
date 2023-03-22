@@ -169,7 +169,7 @@ public:
     size_t capacity() const { return _capacity; }
 
     future<> scatter();
-    future<results> gather(unsigned results_size = 256);
+    future<results> gather(bool per_shard, unsigned results_size = 256);
 };
 
 } // namespace db

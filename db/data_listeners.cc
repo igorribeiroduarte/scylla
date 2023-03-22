@@ -130,7 +130,7 @@ future<> toppartitions_query::scatter() {
 
 using top_t = toppartitions_data_listener::global_top_k::results;
 
-future<toppartitions_query::results> toppartitions_query::gather(unsigned res_size) {
+future<toppartitions_query::results> toppartitions_query::gather(bool per_shard, unsigned res_size) {
     dblog.debug("toppartitions_query::gather");
 
     auto map = [res_size] (toppartitions_data_listener& listener) {
@@ -148,6 +148,7 @@ future<toppartitions_query::results> toppartitions_query::gather(unsigned res_si
         res.write_cardinality += std::get<1>(*rd_wr).cardinality;
         return res;
     };
+
     return _query->map_reduce0(map, results{res_size * smp::count}, reduce)
         .handle_exception([] (auto ep) {
             dblog.error("toppartitions_query::gather: {}", ep);
