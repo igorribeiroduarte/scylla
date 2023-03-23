@@ -138,6 +138,8 @@ public:
 
     virtual void on_write(const schema_ptr& s, const frozen_mutation& m) override;
 
+    void reset();
+
     future<> stop();
 };
 
