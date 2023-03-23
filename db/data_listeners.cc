@@ -159,16 +159,16 @@ future<toppartitions_query::results> toppartitions_query::gather(sharded<replica
                 return make_exception_future<results>(ep);
             });
     } else {
-    return _query->map_reduce0(map, results{res_size * smp::count}, reduce)
-        .handle_exception([] (auto ep) {
-            dblog.error("toppartitions_query::gather: {}", ep);
-            return make_exception_future<results>(ep);
-        }).finally([this] () {
-            dblog.debug("toppartitions_query::gather: stopping query");
-            return _query->stop().then([] {
-                dblog.debug("toppartitions_query::gather: query stopped");
+        return _query->map_reduce0(map, results{res_size * smp::count}, reduce)
+            .handle_exception([] (auto ep) {
+                dblog.error("toppartitions_query::gather: {}", ep);
+                return make_exception_future<results>(ep);
+            }).finally([this] () {
+                dblog.debug("toppartitions_query::gather: stopping query");
+                return _query->stop().then([] {
+                    dblog.debug("toppartitions_query::gather: query stopped");
+                });
             });
-        });
     }
 }
 
