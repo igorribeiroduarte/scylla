@@ -398,17 +398,29 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
 }
 
 void database::on_tp_timer() {
-    for (auto& d: _tp_listener->_top_k_read.top(20).values) {
-        auto partition = ("(" + d.item.schema->ks_name() + ":" + d.item.schema->cf_name() + ") ") + sstring(d.item);
-        dblog.metrics("Toppartitions - Read - Partition [{}]: {}", partition, d.count);
-    }
+    if (_tp_listener) {
+        for (auto& d: _tp_listener->_top_k_read.top(20).values) {
+            auto partition = ("(" + d.item.schema->ks_name() + ":" + d.item.schema->cf_name() + ") ") + sstring(d.item);
+            dblog.metrics("Toppartitions - Read - Partition [{}]: {}", partition, d.count);
+        }
 
-    for (auto& d: _tp_listener->_top_k_write.top(20).values) {
-        auto partition = ("(" + d.item.schema->ks_name() + ":" + d.item.schema->cf_name() + ") ") + sstring(d.item);
-        dblog.metrics("Toppartitions - Write - Partition [{}]: {}", partition, d.count);
-    }
+        for (auto& d: _tp_listener->_top_k_write.top(20).values) {
+            auto partition = ("(" + d.item.schema->ks_name() + ":" + d.item.schema->cf_name() + ") ") + sstring(d.item);
+            dblog.metrics("Toppartitions - Write - Partition [{}]: {}", partition, d.count);
+        }
 
-    _tp_listener->reset();
+        _tp_listener->reset();
+    }
+}
+
+void database::switch_toppartitions_listener() {
+    if (_tp_listener) {
+        dblog.metrics("Uninstalling tp listener");
+        _tp_listener = nullptr;
+    } else {
+        dblog.metrics("Installing tp listener");
+        _tp_listener = std::make_unique<db::toppartitions_data_listener>(*this, std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash>(), std::unordered_set<sstring>());
+    }
 }
 
 const db::extensions& database::extensions() const {

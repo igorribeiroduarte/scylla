@@ -105,6 +105,21 @@
          ]
       },
       {
+         "path":"/storage_service/switch_toppartitions_publisher",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Switch toppartitions publisher",
+               "type":"void",
+               "nickname":"switch_toppartitions_publisher",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[]
+            }
+         ]
+      },
+      {
          "path":"/storage_service/toppartitions/",
          "operations":[
             {
