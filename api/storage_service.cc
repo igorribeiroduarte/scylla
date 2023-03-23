@@ -503,6 +503,15 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         }));
     });
 
+    ss::switch_toppartitions_publisher.set(r, [&ctx] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        co_await ctx.db.invoke_on_all([] (replica::database& db) {
+            db.switch_toppartitions_listener();
+            return make_ready_future<>();
+        });
+
+        co_return json_void();
+    });
+
     ss::toppartitions_generic.set(r, [&ctx] (std::unique_ptr<http::request> req) {
         bool filters_provided = false;
 
