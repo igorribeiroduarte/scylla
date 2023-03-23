@@ -525,6 +525,15 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         }));
     });
 
+    ss::reset_toppartitions_per_shard.set(r, [&ctx] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        co_await ctx.db.invoke_on_all([] (replica::database& db) {
+            db.tp_listener().reset();
+            return make_ready_future<>();
+        });
+
+        co_return json_void();
+    });
+
     ss::toppartitions_generic_per_shard.set(r, [&ctx] (std::unique_ptr<http::request> req) {
         bool filters_provided = req->query_parameters.contains("table_filters") || req->query_parameters.contains("keyspace_filters");
 

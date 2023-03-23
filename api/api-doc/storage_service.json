@@ -105,6 +105,21 @@
          ]
       },
       {
+         "path":"/storage_service/reset_toppartitions_per_shard",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Reset toppartitions_per_shard results",
+               "type":"void",
+               "nickname":"reset_toppartitions_per_shard",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[]
+            }
+         ]
+      },
+      {
          "path":"/storage_service/toppartitions_per_shard/",
          "operations":[
             {
