@@ -79,6 +79,7 @@ using namespace std::chrono_literals;
 using namespace db;
 
 logging::logger dblog("database");
+logging::logger metricslog("metrics");
 
 namespace replica {
 
@@ -370,6 +371,7 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     , _data_listeners(std::make_unique<db::data_listeners>())
     , _tp_listener(std::make_unique<db::toppartitions_data_listener>(*this, std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash>(),
                                                                      std::unordered_set<sstring>(), _cfg.persistent_toppartitions_capacity(), _cfg.persistent_toppartitions_sampling_probability()))
+    , _tp_timer([this] { on_tp_timer(); })
     , _mnotifier(mn)
     , _feat(feat)
     , _shared_token_metadata(stm)
@@ -389,6 +391,24 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     if (_dbcfg.sstables_format) {
         set_format(*_dbcfg.sstables_format);
     }
+
+    _tp_timer.arm_periodic(std::chrono::seconds(_cfg.persistent_toppartitions_publish_interval_sec()));
+}
+
+void database::on_tp_timer() {
+    size_t list_size = _cfg.persistent_toppartitions_list_size();
+
+    for (auto& d: _tp_listener->get_top_k_read().top(list_size).values) {
+        auto partition = ("(" + d.item.schema->ks_name() + ":" + d.item.schema->cf_name() + ") ") + sstring(d.item);
+        metricslog.debug("Toppartitions - Read - Partition [{}]: {}", partition, d.count);
+    }
+
+    for (auto& d: _tp_listener->get_top_k_write().top(list_size).values) {
+        auto partition = ("(" + d.item.schema->ks_name() + ":" + d.item.schema->cf_name() + ") ") + sstring(d.item);
+        metricslog.debug("Toppartitions - Write - Partition [{}]: {}", partition, d.count);
+    }
+
+    _tp_listener->reset();
 }
 
 const db::extensions& database::extensions() const {
@@ -2239,6 +2259,9 @@ future<> database::stop() {
     if (_schema_commitlog) {
         co_await _schema_commitlog->release();
     }
+
+    _tp_timer.cancel();
+
     dblog.info("Shutting down system dirty memory manager");
     co_await _system_dirty_memory_manager.shutdown();
     dblog.info("Shutting down dirty memory manager");
