@@ -125,7 +125,8 @@ public:
 public:
     static global_top_k::results globalize(top_k::results&& r);
     static top_k::results localize(const global_top_k::results& r);
-private:
+//FIXME: Make it private again
+public:
     top_k _top_k_read;
     top_k _top_k_write;
 

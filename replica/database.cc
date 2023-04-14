@@ -367,6 +367,7 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     , _result_memory_limiter(dbcfg.available_memory / 10)
     , _data_listeners(std::make_unique<db::data_listeners>())
     , _tp_listener(std::make_unique<db::toppartitions_data_listener>(*this, std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash>(), std::unordered_set<sstring>()))
+    , _tp_timer([this] { on_tp_timer(); })
     , _mnotifier(mn)
     , _feat(feat)
     , _shared_token_metadata(stm)
@@ -387,6 +388,26 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     if (_dbcfg.sstables_format) {
         set_format(*_dbcfg.sstables_format);
     }
+
+    //seastar::lowres_clock::duration = 10
+    // FIXME: Kill this timer later
+    //_tp_timer.arm(std::chrono::seconds(10));
+    auto period = std::chrono::seconds(10);
+    _tp_timer.arm_periodic(period);
+}
+
+void database::on_tp_timer() {
+    for (auto& d: _tp_listener->_top_k_read.top(20).values) {
+        auto partition = ("(" + d.item.schema->ks_name() + ":" + d.item.schema->cf_name() + ") ") + sstring(d.item);
+        dblog.metrics("Toppartitions - Read - Partition [{}]: {}", partition, d.count);
+    }
+
+    for (auto& d: _tp_listener->_top_k_write.top(20).values) {
+        auto partition = ("(" + d.item.schema->ks_name() + ":" + d.item.schema->cf_name() + ") ") + sstring(d.item);
+        dblog.metrics("Toppartitions - Write - Partition [{}]: {}", partition, d.count);
+    }
+
+    _tp_listener->reset();
 }
 
 const db::extensions& database::extensions() const {
