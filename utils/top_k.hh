@@ -118,6 +118,12 @@ public:
 
     bool valid() const { return _valid; }
 
+    void reset() {
+        _counters_map.clear();
+        _buckets.clear();
+        _valid = true;
+    }
+
     // returns true if item is a new one
     bool append(T item, unsigned inc = 1, unsigned err = 0) {
         return std::get<0>(append_return_all(std::move(item), inc, err));
