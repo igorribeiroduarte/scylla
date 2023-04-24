@@ -69,8 +69,8 @@ future<> toppartitions_data_listener::stop() {
 
 void toppartitions_data_listener::reset() {
     dblog.debug("toppartitions_data_listener: resetting {}", fmt::ptr(this));
-    _top_k_read = top_k();
-    _top_k_write = top_k();
+    _top_k_read.reset();
+    _top_k_write.reset();
 }
 
 flat_mutation_reader_v2 toppartitions_data_listener::on_read(const schema_ptr& s, const dht::partition_range& range,
