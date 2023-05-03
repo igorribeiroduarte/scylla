@@ -65,16 +65,18 @@ using namespace seastar;
 template <class T, class Hash = std::hash<T>, class KeyEqual = std::equal_to<T>>
 class space_saving_top_k {
 private:
+    class entry;
     struct bucket;
     using buckets_iterator = typename std::list<bucket>::iterator;
 
     struct counter {
         buckets_iterator bucket_it;
-        T item;
+        //T item;
+        entry counter_map_entry;
         unsigned count = 0;
         unsigned error = 0;
 
-        counter(T item, unsigned count = 0, unsigned error = 0) : item(item), count(count), error(error) {}
+        counter(T item, unsigned count = 0, unsigned error = 0) : /*item(item), */counter_map_entry(item), count(count), error(error) {}
     };
 
     using counter_ptr = lw_shared_ptr<counter>;
@@ -82,17 +84,17 @@ private:
     using counters = std::list<counter_ptr>;
     using counters_iterator = typename counters::iterator;
 
-public:
-    using key_type = T;
-    using value_type = counters_iterator;
-
 private:
-    class entry : public bi::unordered_set_base_hook<bi::store_hash<true>> {
-        private:
+    struct entry : public bi::unordered_set_base_hook<bi::store_hash<true>> {
+        //public:
+            using key_type = T;
+            using value_type = counters_iterator;
+
+        //private:
             key_type _key;
             std::optional<value_type> _val;
 
-        public:
+        //public:
             const key_type& key() const noexcept {
                 return _key;
             }
@@ -101,6 +103,7 @@ private:
                 return *_val;
             }
 
+            // FIXME: Remove this method if I decide to keep everything public in this class
             void set_value(value_type new_val) {
                 _val.emplace(std::move(new_val));
             }
@@ -121,14 +124,15 @@ private:
     };
 
     // FIXME: Double check if the number of buckets will really always be a power of 2 for this use case
-    using counters_map2 = bi::unordered_set<entry, bi::power_2_buckets<true>, bi::compare_hash<true>>;
+    // FIXME: I temporarily set power_2_buckets to false for safety
+    using counters_map2 = bi::unordered_set<entry, bi::power_2_buckets<false>, bi::compare_hash<true>>;
     using counters_map2_iterator = typename counters_map2::iterator;
     using counters_map2_bucket_traits = typename counters_map2::bucket_traits;
 
     //using counters_map = std::unordered_map<T, counters_iterator, Hash, KeyEqual>;
     //using counters_map_iterator = typename counters_map::iterator;
 
-    struct bucket {
+    struct bucket : public bi::list_base_hook<> {
         std::list<counter_ptr> counters;
         unsigned count;
 
@@ -138,12 +142,15 @@ private:
         }
 
         bucket(T item, unsigned count, unsigned error) {
+            // FIXME: Maybe this should create an entry instead of an item
+
             counters.push_back(make_lw_shared<counter>(item, count, error));
             this->count = count;
         }
     };
 
     using buckets = std::list<bucket>;
+    using buckets2 = bi::list<bucket>;
 
     size_t _capacity;
     //counters_map _counters_map;
@@ -151,14 +158,16 @@ private:
     std::vector<typename counters_map2::bucket_type> _counters_map2_buckets;
     counters_map2 _counters_map2;
 
-    std::vector<std::unique_ptr<entry>> _key_references;
+    //std::vector<std::unique_ptr<entry>> _key_references;
 
     buckets _buckets; // buckets list in ascending order
+    buckets2 _buckets2;
+
     bool _valid = true;
 
 public:
     /// capacity: maximum number of elements to be tracked
-    space_saving_top_k(size_t capacity = 256)
+    space_saving_top_k(size_t capacity = 2)
         : _capacity(capacity)
         , _counters_map2_buckets(capacity)
         , _counters_map2(counters_map2_bucket_traits(_counters_map2_buckets.data(), _counters_map2_buckets.size())) {}
@@ -198,6 +207,7 @@ public:
         //_valid = true;
         _counters_map2.clear();
         _buckets.clear();
+        //_key_references.clear();
         _valid = true;
     }
 
@@ -216,7 +226,7 @@ public:
         // FIXME: Check if it's better to use lw_shared_ptr
         //std::unique_ptr<key_type> p = std::make_unique<key_type>(item);
 
-        _key_references.push_back(std::make_unique<entry>(item));
+        //_key_references.push_back(std::make_unique<entry>(item));
 
         if (!_valid) {
             return {false, std::optional<T>()};
@@ -229,7 +239,7 @@ public:
 
 
             // FIXME: You should probably add the ptr as a member of the entry class instead of keeping this vector of references
-            counters_map2_iterator cmap_it2 = _counters_map2.find(*_key_references.back());
+            counters_map2_iterator cmap_it2 = _counters_map2.find(item);
             bool is_new_item2 = cmap_it2 == _counters_map2.end();
             std::optional<T> dropped_item2;
             counters_iterator counter_it2;
@@ -250,18 +260,20 @@ public:
                     counter_ptr ctr = *counter_it2;
 
                     //_counters_map.erase(ctr->item);
-                    _counters_map2.erase(ctr->item);
+                    _counters_map2.erase(ctr->counter_map_entry._key);
 
                     // FIXME: Make sure that the ptr is not deleted when I return this
-                    dropped_item2 = std::exchange(ctr->item, std::move(item));
+                    //dropped_item2 = std::exchange(ctr->item, std::move(item));
+                    dropped_item2 = std::exchange(ctr->counter_map_entry._key, std::move(item));
                     ctr->error = min_bucket->count + err;
                 }
 
+                _counters_map2.insert((*counter_it2)->counter_map_entry);
 
                 //_counters_map[item] = std::move(counter_it);
                 //FIXME: This won't work if it was already moved. Remove the previous move
-                _key_references.back()->set_value(std::move(counter_it2));
-                _counters_map2.insert(*_key_references.back());
+                //_key_references.back()->set_value(std::move(counter_it2));
+                //_counters_map2.insert(*_key_references.back());
 
 
             } else {
@@ -311,10 +323,14 @@ private:
             bi_next = _buckets.insert(std::next(bi_prev), std::move(buck));
         }
         ctr->bucket_it = bi_next;
+
+
+
         //_counters_map[ctr->item] = std::move(counter_it);
 
 
-        counters_map2_iterator cmap_it2 = _counters_map2.find(ctr->item);
+        //counters_map2_iterator cmap_it2 = _counters_map2.find(ctr->item);
+        counters_map2_iterator cmap_it2 = _counters_map2.find(ctr->counter_map_entry._key);
         //FIXME: This won't work if it was already moved. Remove the previous move
         cmap_it2->set_value(std::move(counter_it));
 
@@ -355,7 +371,7 @@ public:
                 if (list.values.size() == k) {
                     return list;
                 }
-                list.values.emplace_back(result{c->item, c->count, c->error});
+                list.values.emplace_back(result{c->counter_map_entry._key, c->count, c->error});
             }
         }
         return list;
