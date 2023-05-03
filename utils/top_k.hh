@@ -65,18 +65,17 @@ using namespace seastar;
 template <class T, class Hash = std::hash<T>, class KeyEqual = std::equal_to<T>>
 class space_saving_top_k {
 private:
-    class entry;
+    class counters_map_entry;
     struct bucket;
     using buckets_iterator = typename std::list<bucket>::iterator;
 
     struct counter {
         buckets_iterator bucket_it;
-        //T item;
-        entry counter_map_entry;
+        counters_map_entry cmap_entry;
         unsigned count = 0;
         unsigned error = 0;
 
-        counter(T item, unsigned count = 0, unsigned error = 0) : /*item(item), */counter_map_entry(item), count(count), error(error) {}
+        counter(T item, unsigned count = 0, unsigned error = 0) : cmap_entry(item), count(count), error(error) {}
     };
 
     using counter_ptr = lw_shared_ptr<counter>;
@@ -85,54 +84,46 @@ private:
     using counters_iterator = typename counters::iterator;
 
 private:
-    struct entry : public bi::unordered_set_base_hook<bi::store_hash<true>> {
-        //public:
-            using key_type = T;
-            using value_type = counters_iterator;
+    struct counters_map_entry : public bi::unordered_set_base_hook<bi::store_hash<true>> {
+        using key_type = T;
+        using value_type = counters_iterator;
 
-        //private:
-            key_type _key;
-            std::optional<value_type> _val;
+        key_type _key;
+        std::optional<value_type> _val;
 
-        //public:
-            const key_type& key() const noexcept {
-                return _key;
-            }
+        // FIXME: Remove this method if I decide to keep everything public in this class
+        const key_type& key() const noexcept {
+            return _key;
+        }
 
-            const value_type& value() const noexcept {
-                return *_val;
-            }
+        // FIXME: Remove this method if I decide to keep everything public in this class
+        const value_type& value() const noexcept {
+            return *_val;
+        }
 
-            // FIXME: Remove this method if I decide to keep everything public in this class
-            void set_value(value_type new_val) {
-                _val.emplace(std::move(new_val));
-            }
+        // FIXME: Remove this method if I decide to keep everything public in this class
+        void set_value(value_type new_val) {
+            _val.emplace(std::move(new_val));
+        }
 
-            friend bool operator==(const entry& a, const entry& b){
-                return KeyEqual()(a.key(), b.key());
-            }
+        friend bool operator==(const counters_map_entry& a, const counters_map_entry& b){
+            return KeyEqual()(a.key(), b.key());
+        }
 
-            friend std::size_t hash_value(const entry& v) {
-                return Hash()(v.key());
-            }
+        friend std::size_t hash_value(const counters_map_entry& v) {
+            return Hash()(v.key());
+        }
 
-            entry(key_type k) : _key(std::move(k)) {}
-
-            ~entry() {
-                //FIXME: Fill this later. Maybe clear the reference here 
-            }
+        counters_map_entry(key_type k) : _key(std::move(k)) {}
     };
 
     // FIXME: Double check if the number of buckets will really always be a power of 2 for this use case
     // FIXME: I temporarily set power_2_buckets to false for safety
-    using counters_map2 = bi::unordered_set<entry, bi::power_2_buckets<false>, bi::compare_hash<true>>;
-    using counters_map2_iterator = typename counters_map2::iterator;
-    using counters_map2_bucket_traits = typename counters_map2::bucket_traits;
+    using counters_map = bi::unordered_set<counters_map_entry, bi::power_2_buckets<false>, bi::compare_hash<true>>;
+    using counters_map_iterator = typename counters_map::iterator;
+    using counters_map_bucket_traits = typename counters_map::bucket_traits;
 
-    //using counters_map = std::unordered_map<T, counters_iterator, Hash, KeyEqual>;
-    //using counters_map_iterator = typename counters_map::iterator;
-
-    struct bucket : public bi::list_base_hook<> {
+    struct bucket {
         std::list<counter_ptr> counters;
         unsigned count;
 
@@ -142,49 +133,41 @@ private:
         }
 
         bucket(T item, unsigned count, unsigned error) {
-            // FIXME: Maybe this should create an entry instead of an item
-
             counters.push_back(make_lw_shared<counter>(item, count, error));
             this->count = count;
         }
     };
 
     using buckets = std::list<bucket>;
-    using buckets2 = bi::list<bucket>;
 
     size_t _capacity;
-    //counters_map _counters_map;
-
-    std::vector<typename counters_map2::bucket_type> _counters_map2_buckets;
-    counters_map2 _counters_map2;
-
-    //std::vector<std::unique_ptr<entry>> _key_references;
+    std::vector<typename counters_map::bucket_type> _counters_map_buckets;
+    counters_map _counters_map;
 
     buckets _buckets; // buckets list in ascending order
-    buckets2 _buckets2;
 
     bool _valid = true;
 
 public:
     /// capacity: maximum number of elements to be tracked
-    space_saving_top_k(size_t capacity = 2)
+    space_saving_top_k(size_t capacity = 256)
         : _capacity(capacity)
-        , _counters_map2_buckets(capacity)
-        , _counters_map2(counters_map2_bucket_traits(_counters_map2_buckets.data(), _counters_map2_buckets.size())) {}
+        , _counters_map_buckets(capacity)
+        , _counters_map(counters_map_bucket_traits(_counters_map_buckets.data(), _counters_map_buckets.size())) {}
 
     // FIXME: Is it really ok to use noexcept here?
     space_saving_top_k(space_saving_top_k &&t) noexcept
         : _capacity(t._capacity)
-        , _counters_map2_buckets(t._capacity)
-        , _counters_map2(counters_map2_bucket_traits(_counters_map2_buckets.data(), _counters_map2_buckets.size())) {
+        , _counters_map_buckets(t._capacity)
+        , _counters_map(counters_map_bucket_traits(_counters_map_buckets.data(), _counters_map_buckets.size())) {
         append(t.top(t._capacity));
     }
 
     // FIXME: Do this in the correct way
     space_saving_top_k& operator=(space_saving_top_k t) noexcept {
         _capacity = t._capacity;
-        _counters_map2_buckets = std::vector<typename counters_map2::bucket_type>(t._capacity);
-        _counters_map2 = counters_map2(counters_map2_bucket_traits(_counters_map2_buckets.data(), _counters_map2_buckets.size()));
+        _counters_map_buckets = std::vector<typename counters_map::bucket_type>(t._capacity);
+        _counters_map = counters_map(counters_map_bucket_traits(_counters_map_buckets.data(), _counters_map_buckets.size()));
         append(t.top(t._capacity));
         return *this;
     }
@@ -195,19 +178,14 @@ public:
         if (!_valid) {
             throw std::runtime_error("space_saving_top_k state is invalid");
         }
-        //return _counters_map.size();
-        return _counters_map2.size();
+        return _counters_map.size();
     }
 
     bool valid() const { return _valid; }
 
     void reset() {
-        //_counters_map.clear();
-        //_buckets.clear();
-        //_valid = true;
-        _counters_map2.clear();
+        _counters_map.clear();
         _buckets.clear();
-        //_key_references.clear();
         _valid = true;
     }
 
@@ -223,68 +201,42 @@ public:
 
     // returns whether an element is new and an optionally dropped item (due to capacity overflow)
     std::tuple<bool, std::optional<T>> append_return_all(T item, unsigned inc = 1, unsigned err = 0) {
-        // FIXME: Check if it's better to use lw_shared_ptr
-        //std::unique_ptr<key_type> p = std::make_unique<key_type>(item);
-
-        //_key_references.push_back(std::make_unique<entry>(item));
-
         if (!_valid) {
             return {false, std::optional<T>()};
         }
         try {
-            //counters_map_iterator cmap_it = _counters_map.find(item);
-            //bool is_new_item = cmap_it == _counters_map.end();
-            //std::optional<T> dropped_item;
-            //counters_iterator counter_it;
+            counters_map_iterator cmap_it = _counters_map.find(item);
+            bool is_new_item = cmap_it == _counters_map.end();
+            std::optional<T> dropped_item;
+            counters_iterator counter_it;
 
-
-            // FIXME: You should probably add the ptr as a member of the entry class instead of keeping this vector of references
-            counters_map2_iterator cmap_it2 = _counters_map2.find(item);
-            bool is_new_item2 = cmap_it2 == _counters_map2.end();
-            std::optional<T> dropped_item2;
-            counters_iterator counter_it2;
-            (void) is_new_item2;
-
-
-            if (is_new_item2) {
+            if (is_new_item) {
                 if (size() < _capacity) {
                     _buckets.emplace_front(bucket(std::move(item), 0, err)); // inc added later via increment_counter
                     buckets_iterator new_bucket_it = _buckets.begin();
-                    counter_it2 = new_bucket_it->counters.begin();
-                    (*counter_it2)->bucket_it = new_bucket_it;
+                    counter_it = new_bucket_it->counters.begin();
+                    (*counter_it)->bucket_it = new_bucket_it;
                 } else {
                     buckets_iterator min_bucket = _buckets.begin();
                     assert(min_bucket != _buckets.end());
-                    counter_it2 = min_bucket->counters.begin();
-                    assert(counter_it2 != min_bucket->counters.end());
-                    counter_ptr ctr = *counter_it2;
+                    counter_it = min_bucket->counters.begin();
+                    assert(counter_it != min_bucket->counters.end());
+                    counter_ptr ctr = *counter_it;
 
-                    //_counters_map.erase(ctr->item);
-                    _counters_map2.erase(ctr->counter_map_entry._key);
+                    _counters_map.erase(ctr->cmap_entry._key);
 
-                    // FIXME: Make sure that the ptr is not deleted when I return this
-                    //dropped_item2 = std::exchange(ctr->item, std::move(item));
-                    dropped_item2 = std::exchange(ctr->counter_map_entry._key, std::move(item));
+                    dropped_item = std::exchange(ctr->cmap_entry._key, std::move(item));
                     ctr->error = min_bucket->count + err;
                 }
 
-                _counters_map2.insert((*counter_it2)->counter_map_entry);
-
-                //_counters_map[item] = std::move(counter_it);
-                //FIXME: This won't work if it was already moved. Remove the previous move
-                //_key_references.back()->set_value(std::move(counter_it2));
-                //_counters_map2.insert(*_key_references.back());
-
-
+                _counters_map.insert((*counter_it)->cmap_entry);
             } else {
-                //counter_it = cmap_it->second;
-
-                counter_it2 = cmap_it2->value();
+                counter_it = cmap_it->value();
             }
 
-            increment_counter(counter_it2, inc);
+            increment_counter(counter_it, inc);
 
-            return {is_new_item2, std::move(dropped_item2)};
+            return {is_new_item, std::move(dropped_item)};
         } catch (...) {
             _valid = false;
             std::rethrow_exception(std::current_exception());
@@ -324,15 +276,8 @@ private:
         }
         ctr->bucket_it = bi_next;
 
-
-
-        //_counters_map[ctr->item] = std::move(counter_it);
-
-
-        //counters_map2_iterator cmap_it2 = _counters_map2.find(ctr->item);
-        counters_map2_iterator cmap_it2 = _counters_map2.find(ctr->counter_map_entry._key);
-        //FIXME: This won't work if it was already moved. Remove the previous move
-        cmap_it2->set_value(std::move(counter_it));
+        counters_map_iterator cmap_it = _counters_map.find(ctr->cmap_entry._key);
+        cmap_it->set_value(std::move(counter_it));
 
 
         if (old_buck.counters.empty()) {
@@ -371,7 +316,7 @@ public:
                 if (list.values.size() == k) {
                     return list;
                 }
-                list.values.emplace_back(result{c->counter_map_entry._key, c->count, c->error});
+                list.values.emplace_back(result{c->cmap_entry._key, c->count, c->error});
             }
         }
         return list;
