@@ -118,14 +118,19 @@ private:
     };
 
     // FIXME: Double check if the number of buckets will really always be a power of 2 for this use case
-    // FIXME: I temporarily set power_2_buckets to false for safety
-    using counters_map = bi::unordered_set<counters_map_entry, bi::power_2_buckets<false>, bi::compare_hash<true>>;
+    using counters_map = bi::unordered_set<counters_map_entry, bi::power_2_buckets<true>, bi::compare_hash<true>>;
     using counters_map_iterator = typename counters_map::iterator;
     using counters_map_bucket_traits = typename counters_map::bucket_traits;
 
     struct bucket {
         std::list<counter_ptr> counters;
         unsigned count;
+
+        // FIXME: Use a better name for this method
+        void reset(counter_ptr new_ctr) {
+            count = new_ctr->count;
+            counters.push_back(new_ctr);
+        }
 
         bucket(counter_ptr ctr) {
             count = ctr->count;
@@ -170,6 +175,12 @@ public:
         _counters_map = counters_map(counters_map_bucket_traits(_counters_map_buckets.data(), _counters_map_buckets.size()));
         append(t.top(t._capacity));
         return *this;
+    }
+
+    ~space_saving_top_k() {
+        // Counters_map needs to be cleaned before the other attributes to avoid the deletion
+        // of elements while they're still linked
+        _counters_map.clear();
     }
 
     size_t capacity() const { return _capacity; }
@@ -270,10 +281,20 @@ private:
         }
 
         if (bi_next == _buckets.end()) {
-            bucket buck{ctr};
-            counter_it = buck.counters.begin();
-            bi_next = _buckets.insert(std::next(bi_prev), std::move(buck));
+            if (old_buck.counters.empty()) {
+                // If it got here, it means that n_buckets < n_counters
+                old_buck.reset(ctr);
+                counter_it = old_buck.counters.begin();
+                bi_next = _buckets.insert(std::next(bi_prev), std::move(old_buck));
+            } else {
+                // This allocation will only happen while n_buckets < capacity
+                bucket buck{ctr};
+
+                counter_it = buck.counters.begin();
+                bi_next = _buckets.insert(std::next(bi_prev), std::move(buck));
+            }
         }
+
         ctr->bucket_it = bi_next;
 
         counters_map_iterator cmap_it = _counters_map.find(ctr->cmap_entry._key);
