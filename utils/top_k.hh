@@ -154,6 +154,8 @@ private:
     std::vector<typename counters_map::bucket_type> _counters_map_buckets;
     counters_map _counters_map;
 
+    bi::list<bucket> _unused_buckets;
+
     std::vector<lw_shared_ptr<bucket>> _buckets_vector;
     buckets _buckets; // buckets list in ascending order
 
@@ -190,6 +192,9 @@ public:
 
         // _buckets needs to be cleaned before _buckets_vector
         _buckets.clear();
+
+        // _unused_buckets needs to be cleaned before _buckets_vector
+        _unused_buckets.clear();
     }
 
     size_t capacity() const { return _capacity; }
@@ -206,6 +211,10 @@ public:
     void reset() {
         _counters_map.clear();
         _buckets.clear();
+        _unused_buckets.clear();
+
+        _buckets_vector.clear();
+
         _valid = true;
     }
 
@@ -242,6 +251,7 @@ public:
                     (*counter_it)->bucket_it = new_bucket_it;
                 } else {
                     buckets_iterator min_bucket = _buckets.begin();
+
                     assert(min_bucket != _buckets.end());
                     counter_it = min_bucket->counters.begin();
                     assert(counter_it != min_bucket->counters.end());
@@ -273,12 +283,14 @@ private:
 
         buckets_iterator old_bucket_it = ctr->bucket_it;
         auto& old_buck = *old_bucket_it;
+
         old_buck.counters.erase(counter_it);
 
         ctr->count += inc;
 
         buckets_iterator bi_prev = old_bucket_it;
         buckets_iterator bi_next = std::next(old_bucket_it);
+
         while (bi_next != _buckets.end()) {
             bucket& buck = *bi_next;
             if (ctr->count == buck.count) {
@@ -293,28 +305,25 @@ private:
             }
         }
 
+        buckets_iterator insert_at = std::next(bi_prev);
         if (old_buck.counters.empty()) {
-            if (bi_next == _buckets.end() and bi_prev == old_bucket_it) {
-                bi_prev = std::prev(old_bucket_it);
-            }
-
             _buckets.erase(old_bucket_it);
+            _unused_buckets.push_back(old_buck);
         }
 
         if (bi_next == _buckets.end()) {
-            if (old_buck.counters.empty()) {
-                // If it got here, it means that n_buckets < n_counters
-                old_buck.reset(ctr);
-                counter_it = old_buck.counters.begin();
+            if (not _unused_buckets.empty()) {
+                bucket& buck = _unused_buckets.back();
+                _unused_buckets.pop_back();
 
-                bi_next = _buckets.insert(std::next(bi_prev), old_buck);
+                buck.reset(ctr);
+                bi_next = _buckets.insert(insert_at, buck);
             } else {
-                // This allocation will only happen while n_buckets < capacity
                 _buckets_vector.push_back(make_lw_shared<bucket>(ctr));
                 bucket &buck = *_buckets_vector.back();
 
                 counter_it = buck.counters.begin();
-                bi_next = _buckets.insert(std::next(bi_prev), buck);
+                bi_next = _buckets.insert(insert_at, buck);
             }
         }
 
