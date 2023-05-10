@@ -52,7 +52,7 @@ toppartitions_item_key::operator sstring() const {
 }
 
 toppartitions_data_listener::toppartitions_data_listener(replica::database& db, std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> table_filters,
-        std::unordered_set<sstring> keyspace_filters) : _db(db), _table_filters(std::move(table_filters)), _keyspace_filters(std::move(keyspace_filters)) {
+        std::unordered_set<sstring> keyspace_filters, size_t topk_capacity) : _db(db), _table_filters(std::move(table_filters)), _keyspace_filters(std::move(keyspace_filters)), _top_k_read(topk_capacity), _top_k_write(topk_capacity) {
     dblog.debug("toppartitions_data_listener: installing {}", fmt::ptr(this));
     _db.data_listeners().install(this);
 }

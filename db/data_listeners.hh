@@ -131,7 +131,7 @@ public:
     top_k _top_k_write;
 
 public:
-    toppartitions_data_listener(replica::database& db, std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> table_filters, std::unordered_set<sstring> keyspace_filters);
+    toppartitions_data_listener(replica::database& db, std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> table_filters, std::unordered_set<sstring> keyspace_filters, size_t topk_capacity = 256);
     ~toppartitions_data_listener();
 
     virtual flat_mutation_reader_v2 on_read(const schema_ptr& s, const dht::partition_range& range,

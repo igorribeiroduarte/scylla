@@ -413,13 +413,13 @@ void database::on_tp_timer() {
     }
 }
 
-void database::switch_toppartitions_listener() {
+void database::switch_toppartitions_listener(size_t capacity) {
     if (_tp_listener) {
         dblog.warn("Uninstalling tp listener");
         _tp_listener = nullptr;
     } else {
-        dblog.warn("Installing tp listener");
-        _tp_listener = std::make_unique<db::toppartitions_data_listener>(*this, std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash>(), std::unordered_set<sstring>());
+        dblog.warn("Installing tp listener - capacity {}", capacity);
+        _tp_listener = std::make_unique<db::toppartitions_data_listener>(*this, std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash>(), std::unordered_set<sstring>(), capacity);
     }
 }
 

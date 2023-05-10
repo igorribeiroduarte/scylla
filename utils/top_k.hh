@@ -167,7 +167,8 @@ public:
     space_saving_top_k(size_t capacity = 256)
         : _capacity(capacity)
         , _counters_map_buckets(capacity)
-        , _counters_map(counters_map_bucket_traits(_counters_map_buckets.data(), _counters_map_buckets.size())) {}
+        , _counters_map(counters_map_bucket_traits(_counters_map_buckets.data(), _counters_map_buckets.size())) {
+        }
 
     // FIXME: Is it really ok to use noexcept here?
     space_saving_top_k(space_saving_top_k &&t) noexcept

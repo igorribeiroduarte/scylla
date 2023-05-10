@@ -115,7 +115,16 @@
                "produces":[
                   "application/json"
                ],
-               "parameters":[]
+               "parameters":[
+                  {
+                    "name":"capacity",
+                    "description":"capacity of stream summary: determines amount of resources used in query processing",
+                    "required":false,
+                    "allowMultiple":false,
+                    "type": "long",
+                    "paramType":"query"
+                 }
+               ]
             }
          ]
       },

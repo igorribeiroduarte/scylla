@@ -1467,7 +1467,7 @@ public:
     database(database&&) = delete;
     ~database();
 
-    void switch_toppartitions_listener();
+    void switch_toppartitions_listener(size_t capacity);
 
     cache_tracker& row_cache_tracker() { return _row_cache_tracker; }
     future<> drop_caches() const;
