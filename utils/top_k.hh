@@ -48,6 +48,7 @@
 #include <vector>
 #include <unordered_map>
 #include <boost/intrusive/unordered_set.hpp>
+#include <boost/intrusive/list.hpp>
 #include <memory>
 #include <tuple>
 #include <assert.h>
@@ -65,12 +66,39 @@ using namespace seastar;
 template <class T, class Hash = std::hash<T>, class KeyEqual = std::equal_to<T>>
 class space_saving_top_k {
 private:
+    struct counter;
+    using counter_ptr = lw_shared_ptr<counter>;
+
+    struct bucket : public bi::list_base_hook<> {
+        std::list<counter_ptr> counters;
+        unsigned count;
+
+        // FIXME: Use a better name for this method
+        void reset(counter_ptr new_ctr) {
+            count = new_ctr->count;
+            counters.push_back(new_ctr);
+        }
+
+        bucket(counter_ptr ctr) {
+            count = ctr->count;
+            counters.push_back(ctr);
+        }
+
+        bucket(T item, unsigned count, unsigned error) {
+            counters.push_back(make_lw_shared<counter>(item, count, error));
+            this->count = count;
+        }
+    };
+
+
     class counters_map_entry;
-    struct bucket;
-    using buckets_iterator = typename std::list<bucket>::iterator;
+
+    using buckets = bi::list<bucket>;
+    using buckets_iterator = typename buckets::iterator;
 
     struct counter {
         buckets_iterator bucket_it;
+
         counters_map_entry cmap_entry;
         unsigned count = 0;
         unsigned error = 0;
@@ -78,7 +106,6 @@ private:
         counter(T item, unsigned count = 0, unsigned error = 0) : cmap_entry(item), count(count), error(error) {}
     };
 
-    using counter_ptr = lw_shared_ptr<counter>;
 
     using counters = std::list<counter_ptr>;
     using counters_iterator = typename counters::iterator;
@@ -122,33 +149,12 @@ private:
     using counters_map_iterator = typename counters_map::iterator;
     using counters_map_bucket_traits = typename counters_map::bucket_traits;
 
-    struct bucket {
-        std::list<counter_ptr> counters;
-        unsigned count;
-
-        // FIXME: Use a better name for this method
-        void reset(counter_ptr new_ctr) {
-            count = new_ctr->count;
-            counters.push_back(new_ctr);
-        }
-
-        bucket(counter_ptr ctr) {
-            count = ctr->count;
-            counters.push_back(ctr);
-        }
-
-        bucket(T item, unsigned count, unsigned error) {
-            counters.push_back(make_lw_shared<counter>(item, count, error));
-            this->count = count;
-        }
-    };
-
-    using buckets = std::list<bucket>;
 
     size_t _capacity;
     std::vector<typename counters_map::bucket_type> _counters_map_buckets;
     counters_map _counters_map;
 
+    std::vector<lw_shared_ptr<bucket>> _buckets_vector;
     buckets _buckets; // buckets list in ascending order
 
     bool _valid = true;
@@ -178,9 +184,12 @@ public:
     }
 
     ~space_saving_top_k() {
-        // Counters_map needs to be cleaned before the other attributes to avoid the deletion
+        // _counters_map needs to be cleaned before the other attributes to avoid the deletion
         // of elements while they're still linked
         _counters_map.clear();
+
+        // _buckets needs to be cleaned before _buckets_vector
+        _buckets.clear();
     }
 
     size_t capacity() const { return _capacity; }
@@ -217,9 +226,13 @@ public:
 
             if (is_new_item) {
                 if (size() < _capacity) {
-                    _buckets.emplace_front(bucket(std::move(item), 0, err)); // inc added later via increment_counter
+                    _buckets_vector.push_back(make_lw_shared<bucket>(std::move(item), 0, err));
+                    _buckets.push_front(*_buckets_vector.back()); // inc added later via increment_counter
+
                     buckets_iterator new_bucket_it = _buckets.begin();
+
                     counter_it = new_bucket_it->counters.begin();
+
                     (*counter_it)->bucket_it = new_bucket_it;
                 } else {
                     buckets_iterator min_bucket = _buckets.begin();
@@ -274,18 +287,28 @@ private:
             }
         }
 
+        if (old_buck.counters.empty()) {
+            if (bi_next == _buckets.end() and bi_prev == old_bucket_it) {
+                bi_prev = std::prev(old_bucket_it);
+            }
+
+            _buckets.erase(old_bucket_it);
+        }
+
         if (bi_next == _buckets.end()) {
             if (old_buck.counters.empty()) {
                 // If it got here, it means that n_buckets < n_counters
                 old_buck.reset(ctr);
                 counter_it = old_buck.counters.begin();
-                bi_next = _buckets.insert(std::next(bi_prev), std::move(old_buck));
+
+                bi_next = _buckets.insert(std::next(bi_prev), old_buck);
             } else {
                 // This allocation will only happen while n_buckets < capacity
-                bucket buck{ctr};
+                _buckets_vector.push_back(make_lw_shared<bucket>(ctr));
+                bucket &buck = *_buckets_vector.back();
 
                 counter_it = buck.counters.begin();
-                bi_next = _buckets.insert(std::next(bi_prev), std::move(buck));
+                bi_next = _buckets.insert(std::next(bi_prev), buck);
             }
         }
 
@@ -294,10 +317,6 @@ private:
         counters_map_iterator cmap_it = _counters_map.find(ctr->cmap_entry._key);
         cmap_it->set_value(std::move(counter_it));
 
-
-        if (old_buck.counters.empty()) {
-            _buckets.erase(old_bucket_it);
-        }
     }
 
     //-----------------------------------------------------------------------------------------
