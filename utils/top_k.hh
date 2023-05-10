@@ -76,6 +76,7 @@ private:
         // FIXME: Use a better name for this method
         void reset(counter_ptr new_ctr) {
             count = new_ctr->count;
+            assert(counters.size() == 0);
             counters.push_back(new_ctr);
         }
 
@@ -189,6 +190,7 @@ public:
         // _counters_map needs to be cleaned before the other attributes to avoid the deletion
         // of elements while they're still linked
         _counters_map.clear();
+        _counters_map_buckets.clear();
 
         // _buckets needs to be cleaned before _buckets_vector
         _buckets.clear();
@@ -317,6 +319,9 @@ private:
                 _unused_buckets.pop_back();
 
                 buck.reset(ctr);
+
+                counter_it = buck.counters.begin();
+
                 bi_next = _buckets.insert(insert_at, buck);
             } else {
                 _buckets_vector.push_back(make_lw_shared<bucket>(ctr));
@@ -331,7 +336,6 @@ private:
 
         counters_map_iterator cmap_it = _counters_map.find(ctr->cmap_entry._key);
         cmap_it->set_value(std::move(counter_it));
-
     }
 
     //-----------------------------------------------------------------------------------------
