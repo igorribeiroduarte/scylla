@@ -45,7 +45,9 @@
 
 #include <cstdio>
 #include <list>
+#include <vector>
 #include <unordered_map>
+#include <boost/intrusive/unordered_set.hpp>
 #include <memory>
 #include <tuple>
 #include <assert.h>
@@ -54,6 +56,8 @@
 #include <seastar/core/sstring.hh>
 #include "utils/chunked_vector.hh"
 
+namespace bi = boost::intrusive;
+
 namespace utils {
 
 using namespace seastar;
@@ -61,16 +65,17 @@ using namespace seastar;
 template <class T, class Hash = std::hash<T>, class KeyEqual = std::equal_to<T>>
 class space_saving_top_k {
 private:
+    class counters_map_entry;
     struct bucket;
     using buckets_iterator = typename std::list<bucket>::iterator;
 
     struct counter {
         buckets_iterator bucket_it;
-        T item;
+        counters_map_entry cmap_entry;
         unsigned count = 0;
         unsigned error = 0;
 
-        counter(T item, unsigned count = 0, unsigned error = 0) : item(item), count(count), error(error) {}
+        counter(T item, unsigned count = 0, unsigned error = 0) : cmap_entry(item), count(count), error(error) {}
     };
 
     using counter_ptr = lw_shared_ptr<counter>;
@@ -78,12 +83,54 @@ private:
     using counters = std::list<counter_ptr>;
     using counters_iterator = typename counters::iterator;
 
-    using counters_map = std::unordered_map<T, counters_iterator, Hash, KeyEqual>;
+private:
+    struct counters_map_entry : public bi::unordered_set_base_hook<bi::store_hash<true>> {
+        using key_type = T;
+        using value_type = counters_iterator;
+
+        key_type _key;
+        std::optional<value_type> _val;
+
+        // FIXME: Remove this method if I decide to keep everything public in this class
+        const key_type& key() const noexcept {
+            return _key;
+        }
+
+        // FIXME: Remove this method if I decide to keep everything public in this class
+        const value_type& value() const noexcept {
+            return *_val;
+        }
+
+        // FIXME: Remove this method if I decide to keep everything public in this class
+        void set_value(value_type new_val) {
+            _val.emplace(std::move(new_val));
+        }
+
+        friend bool operator==(const counters_map_entry& a, const counters_map_entry& b){
+            return KeyEqual()(a.key(), b.key());
+        }
+
+        friend std::size_t hash_value(const counters_map_entry& v) {
+            return Hash()(v.key());
+        }
+
+        counters_map_entry(key_type k) : _key(std::move(k)) {}
+    };
+
+    // FIXME: Double check if the number of buckets will really always be a power of 2 for this use case
+    using counters_map = bi::unordered_set<counters_map_entry, bi::power_2_buckets<true>, bi::compare_hash<true>>;
     using counters_map_iterator = typename counters_map::iterator;
+    using counters_map_bucket_traits = typename counters_map::bucket_traits;
 
     struct bucket {
         std::list<counter_ptr> counters;
         unsigned count;
+
+        // FIXME: Use a better name for this method
+        void reset(counter_ptr new_ctr) {
+            count = new_ctr->count;
+            counters.push_back(new_ctr);
+        }
 
         bucket(counter_ptr ctr) {
             count = ctr->count;
@@ -99,13 +146,42 @@ private:
     using buckets = std::list<bucket>;
 
     size_t _capacity;
+    std::vector<typename counters_map::bucket_type> _counters_map_buckets;
     counters_map _counters_map;
+
     buckets _buckets; // buckets list in ascending order
+
     bool _valid = true;
 
 public:
     /// capacity: maximum number of elements to be tracked
-    space_saving_top_k(size_t capacity = 256) : _capacity(capacity) {}
+    space_saving_top_k(size_t capacity = 256)
+        : _capacity(capacity)
+        , _counters_map_buckets(capacity)
+        , _counters_map(counters_map_bucket_traits(_counters_map_buckets.data(), _counters_map_buckets.size())) {}
+
+    // FIXME: Is it really ok to use noexcept here?
+    space_saving_top_k(space_saving_top_k &&t) noexcept
+        : _capacity(t._capacity)
+        , _counters_map_buckets(t._capacity)
+        , _counters_map(counters_map_bucket_traits(_counters_map_buckets.data(), _counters_map_buckets.size())) {
+        append(t.top(t._capacity));
+    }
+
+    // FIXME: Do this in the correct way
+    space_saving_top_k& operator=(space_saving_top_k t) noexcept {
+        _capacity = t._capacity;
+        _counters_map_buckets = std::vector<typename counters_map::bucket_type>(t._capacity);
+        _counters_map = counters_map(counters_map_bucket_traits(_counters_map_buckets.data(), _counters_map_buckets.size()));
+        append(t.top(t._capacity));
+        return *this;
+    }
+
+    ~space_saving_top_k() {
+        // Counters_map needs to be cleaned before the other attributes to avoid the deletion
+        // of elements while they're still linked
+        _counters_map.clear();
+    }
 
     size_t capacity() const { return _capacity; }
 
@@ -144,6 +220,7 @@ public:
             bool is_new_item = cmap_it == _counters_map.end();
             std::optional<T> dropped_item;
             counters_iterator counter_it;
+
             if (is_new_item) {
                 if (size() < _capacity) {
                     _buckets.emplace_front(bucket(std::move(item), 0, err)); // inc added later via increment_counter
@@ -156,13 +233,16 @@ public:
                     counter_it = min_bucket->counters.begin();
                     assert(counter_it != min_bucket->counters.end());
                     counter_ptr ctr = *counter_it;
-                    _counters_map.erase(ctr->item);
-                    dropped_item = std::exchange(ctr->item, std::move(item));
+
+                    _counters_map.erase(ctr->cmap_entry._key);
+
+                    dropped_item = std::exchange(ctr->cmap_entry._key, std::move(item));
                     ctr->error = min_bucket->count + err;
                 }
-                _counters_map[item] = std::move(counter_it);
+
+                _counters_map.insert((*counter_it)->cmap_entry);
             } else {
-                counter_it = cmap_it->second;
+                counter_it = cmap_it->value();
             }
 
             increment_counter(counter_it, inc);
@@ -201,12 +281,25 @@ private:
         }
 
         if (bi_next == _buckets.end()) {
-            bucket buck{ctr};
-            counter_it = buck.counters.begin();
-            bi_next = _buckets.insert(std::next(bi_prev), std::move(buck));
+            if (old_buck.counters.empty()) {
+                // If it got here, it means that n_buckets < n_counters
+                old_buck.reset(ctr);
+                counter_it = old_buck.counters.begin();
+                bi_next = _buckets.insert(std::next(bi_prev), std::move(old_buck));
+            } else {
+                // This allocation will only happen while n_buckets < capacity
+                bucket buck{ctr};
+
+                counter_it = buck.counters.begin();
+                bi_next = _buckets.insert(std::next(bi_prev), std::move(buck));
+            }
         }
+
         ctr->bucket_it = bi_next;
-        _counters_map[ctr->item] = std::move(counter_it);
+
+        counters_map_iterator cmap_it = _counters_map.find(ctr->cmap_entry._key);
+        cmap_it->set_value(std::move(counter_it));
+
 
         if (old_buck.counters.empty()) {
             _buckets.erase(old_bucket_it);
@@ -244,7 +337,7 @@ public:
                 if (list.values.size() == k) {
                     return list;
                 }
-                list.values.emplace_back(result{c->item, c->count, c->error});
+                list.values.emplace_back(result{c->cmap_entry._key, c->count, c->error});
             }
         }
         return list;
