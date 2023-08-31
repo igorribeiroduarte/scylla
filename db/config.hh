@@ -414,6 +414,11 @@ public:
 
     named_value<unsigned> minimum_keyspace_rf;
 
+    named_value<uint32_t> persistent_toppartitions_publish_interval_sec;
+    named_value<size_t> persistent_toppartitions_capacity;
+    named_value<size_t> persistent_toppartitions_list_size;
+    named_value<double> persistent_toppartitions_sampling_probability;
+
     seastar::logging_settings logging_settings(const log_cli::options&) const;
 
     const db::extensions& extensions() const;
