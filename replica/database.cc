@@ -372,6 +372,11 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     , _tp_listener(std::make_unique<db::toppartitions_data_listener>(*this, std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash>(),
                                                                      std::unordered_set<sstring>(), _cfg.persistent_toppartitions_capacity(), _cfg.persistent_toppartitions_sampling_probability()))
     , _tp_timer([this] { on_tp_timer(); })
+    , _update_persistent_toppartitions_action([this] { update_toppartitions_listener(); return make_ready_future<>(); })
+    , _persistent_toppartitions_publish_interval_sec_observer(_cfg.persistent_toppartitions_publish_interval_sec.observe(_update_persistent_toppartitions_action.make_observer()))
+    , _persistent_toppartitions_capacity_observer(_cfg.persistent_toppartitions_capacity.observe(_update_persistent_toppartitions_action.make_observer()))
+    , _persistent_toppartitions_list_size_observer(_cfg.persistent_toppartitions_list_size.observe(_update_persistent_toppartitions_action.make_observer()))
+    , _persistent_toppartitions_sampling_probability_observer(_cfg.persistent_toppartitions_sampling_probability.observe(_update_persistent_toppartitions_action.make_observer()))
     , _mnotifier(mn)
     , _feat(feat)
     , _shared_token_metadata(stm)
@@ -409,6 +414,18 @@ void database::on_tp_timer() {
     }
 
     _tp_listener->reset();
+}
+
+void database::update_toppartitions_listener() {
+    dblog.info("Updating toppartitions listener");
+
+    if (!_tp_listener->set_sample_probability(_cfg.persistent_toppartitions_sampling_probability())) {
+        dblog.error("Failed to apply persistent toppartitions changes. Sampling probability must be in a [0,1] range");
+    }
+
+    _tp_listener->set_capacity(_cfg.persistent_toppartitions_capacity());
+
+    _tp_timer.rearm_periodic(std::chrono::seconds(_cfg.persistent_toppartitions_publish_interval_sec()));
 }
 
 const db::extensions& database::extensions() const {
