@@ -145,7 +145,7 @@ public:
 public:
     static global_top_k::results globalize(top_k::results&& r);
     static top_k::results localize(const global_top_k::results& r);
-private:
+public:
     top_k _top_k_read;
     top_k _top_k_write;
 
@@ -158,13 +158,13 @@ public:
 
     virtual void on_write(const schema_ptr& s, const frozen_mutation& m) override;
 
-    const top_k get_top_k_read() const {
-        return _top_k_read;
-    }
+    //const top_k get_top_k_read() const {
+    //    return _top_k_read;
+    //}
 
-    const top_k get_top_k_write() const {
-        return _top_k_write;
-    }
+    //const top_k get_top_k_write() const {
+    //    return _top_k_write;
+    //}
 
     void set_capacity(size_t capacity) {
         _capacity = capacity;

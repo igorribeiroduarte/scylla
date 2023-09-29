@@ -412,12 +412,12 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
 void database::on_toppartitions_timer() {
     size_t list_size = _cfg.persistent_toppartitions_list_size();
 
-    for (auto& d: _toppartitions_listener->get_top_k_read().top(list_size).values) {
+    for (auto& d: _toppartitions_listener->_top_k_read.top(list_size).values) {
         auto partition = ("(" + d.item.schema->ks_name() + ":" + d.item.schema->cf_name() + ") ") + sstring(d.item);
         metricslog.info("Toppartitions - Read - Partition [{}]: {}", partition, d.count);
     }
 
-    for (auto& d: _toppartitions_listener->get_top_k_write().top(list_size).values) {
+    for (auto& d: _toppartitions_listener->_top_k_write.top(list_size).values) {
         auto partition = ("(" + d.item.schema->ks_name() + ":" + d.item.schema->cf_name() + ") ") + sstring(d.item);
         metricslog.info("Toppartitions - Write - Partition [{}]: {}", partition, d.count);
     }
