@@ -119,6 +119,7 @@ public:
     template <typename LoadFunc>
     future<value_type> get(const key_type& key, LoadFunc&& load) {
         return _cache.get_ptr(key.key(), [load = std::forward<LoadFunc>(load)] (const cache_key_type&) { return load(); }).then([] (cache_value_ptr v_ptr) {
+            (*v_ptr)->_metrics.inc_hits();
             return make_ready_future<value_type>((*v_ptr)->checked_weak_from_this());
         });
     }

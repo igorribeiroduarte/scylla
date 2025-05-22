@@ -37,6 +37,14 @@ class prepared_statement : public seastar::weakly_referencable<prepared_statemen
 public:
     typedef seastar::checked_ptr<seastar::weak_ptr<const prepared_statement>> checked_weak_ptr;
 
+    struct metrics {
+        uint64_t prepared_statement_hits = 0;
+
+        void inc_hits() noexcept {
+            prepared_statement_hits++;
+        }
+    };
+
 public:
     const seastar::shared_ptr<cql_statement> statement;
     const std::vector<seastar::lw_shared_ptr<column_specification>> bound_names;
@@ -56,6 +64,8 @@ public:
     checked_weak_ptr checked_weak_from_this() const {
         return checked_weak_ptr(this->weak_from_this());
     }
+
+    metrics _metrics;
 };
 
 }
